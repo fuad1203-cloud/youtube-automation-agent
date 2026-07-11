@@ -1,4 +1,6 @@
 const sharp = require('sharp');
+const OpenAI = require('openai');
+const axios = require('axios');
 const path = require('path');
 const fs = require('fs').promises;
 const { Logger } = require('../utils/logger');
@@ -9,6 +11,14 @@ class ThumbnailDesignerAgent {
     this.credentials = credentials;
     this.logger = new Logger('ThumbnailDesigner');
     this.templatesPath = path.join(__dirname, '..', 'data', 'thumbnail-templates');
+
+    const rawCreds = credentials?.credentials || credentials || {};
+    const openaiKey = rawCreds.openai?.apiKey || process.env.OPENAI_API_KEY;
+    if (openaiKey) {
+      this.openai = new OpenAI({ apiKey: openaiKey });
+    } else {
+      this.logger.warn('OpenAI API key not found - thumbnail background art will be simulated');
+    }
   }
 
   async initialize() {
@@ -32,12 +42,12 @@ class ThumbnailDesignerAgent {
       
       // Generate thumbnail concept
       const concept = await this.generateConcept(script);
-      
+
       // Create thumbnail prompt for AI generation
       const prompt = await this.createPrompt(concept);
-      
-      // Generate base thumbnail
-      const thumbnailPath = await this.createThumbnail(concept);
+
+      // Generate base thumbnail (AI background art if available, gradient fallback otherwise)
+      const thumbnailPath = await this.createThumbnail(concept, prompt);
       
       // Add text overlay
       const finalThumbnail = await this.addTextOverlay(thumbnailPath, concept);
@@ -100,9 +110,12 @@ class ThumbnailDesignerAgent {
     };
 
     const baseConcept = concepts[script.metadata?.strategy?.contentType?.toLowerCase()] || concepts.explainer;
-    
+    const strategy = script.metadata?.strategy || {};
+
     return {
       title: this.formatThumbnailTitle(script.title),
+      subject: strategy.topic || script.title,
+      angle: strategy.angle || '',
       style: baseConcept.style,
       primaryText: this.extractPrimaryText(script.title),
       secondaryText: this.generateSecondaryText(script),
@@ -151,16 +164,18 @@ class ThumbnailDesignerAgent {
   generateSecondaryText(script) {
     if (script.metadata && script.metadata.strategy) {
       const strategy = script.metadata.strategy;
-      
+
       if (strategy.contentType === 'Tutorial') {
         return 'STEP BY STEP';
       } else if (strategy.contentType === 'List') {
         return 'YOU WON\'T BELIEVE #1';
       } else if (strategy.contentType === 'Review') {
         return 'HONEST REVIEW';
+      } else if (strategy.keywords && strategy.keywords[0]) {
+        return String(strategy.keywords[0]).toUpperCase().slice(0, 30);
       }
     }
-    
+
     return 'MUST WATCH';
   }
 
@@ -187,30 +202,25 @@ class ThumbnailDesignerAgent {
   }
 
   async createPrompt(concept) {
-    const prompt = `Create a YouTube thumbnail with the following specifications:
-    Style: ${concept.style}
-    Primary Text: "${concept.primaryText}"
-    Secondary Text: "${concept.secondaryText}"
-    Color Scheme: ${concept.colors.primary}, ${concept.colors.secondary}, ${concept.colors.accent}
-    Elements to include: ${concept.elements.join(', ')}
-    Emotional tone: ${concept.emotion}
-    Composition: ${concept.composition}
-    
-    The thumbnail should be eye-catching, professional, and optimized for high click-through rate.
-    Resolution: 1280x720px
-    Format: High contrast, bold text, clear imagery`;
-    
-    return prompt;
+    return `A photorealistic, dramatic YouTube thumbnail background scene depicting: ${concept.subject}. ${concept.angle}
+    Emotional tone: ${concept.emotion}, ${concept.style}
+    Composition: ${concept.composition}, cinematic lighting, high contrast, professional editorial photography style, optimized for high click-through rate.
+    Do not include any text, letters, words, captions, or logos in the image — leave clear negative space for a text overlay to be added separately.
+    Resolution: 1280x720px, 16:9 aspect ratio.`;
   }
 
-  async createThumbnail(concept) {
-    // Create a base thumbnail using Sharp
+  async createThumbnail(concept, prompt) {
+    const aiBackground = await this.generateAIBackground(prompt);
+    if (aiBackground) {
+      return aiBackground;
+    }
+
+    // Fallback: gradient background using Sharp when no AI image is available
     const width = 1280;
     const height = 720;
-    
+
     const outputPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_${Date.now()}.png`);
-    
-    // Create gradient background
+
     const svg = `
       <svg width="${width}" height="${height}">
         <defs>
@@ -222,13 +232,43 @@ class ThumbnailDesignerAgent {
         <rect width="${width}" height="${height}" fill="url(#gradient)" />
       </svg>
     `;
-    
+
     await sharp(Buffer.from(svg))
       .resize(width, height)
       .png()
       .toFile(outputPath);
-    
+
     return outputPath;
+  }
+
+  async generateAIBackground(prompt) {
+    if (!this.openai) {
+      return null;
+    }
+
+    try {
+      const response = await this.openai.images.generate({
+        model: 'gpt-image-2',
+        prompt,
+        n: 1,
+        size: '1536x1024',
+        quality: 'high'
+      });
+
+      const outputPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_ai_${Date.now()}.png`);
+
+      if (response.data[0].b64_json) {
+        await fs.writeFile(outputPath, Buffer.from(response.data[0].b64_json, 'base64'));
+      } else {
+        const imageResponse = await axios.get(response.data[0].url, { responseType: 'arraybuffer' });
+        await fs.writeFile(outputPath, imageResponse.data);
+      }
+
+      return outputPath;
+    } catch (error) {
+      this.logger.warn(`AI thumbnail background failed; using gradient fallback: ${error.message}`);
+      return null;
+    }
   }
 
   hexToRgb(color) {
@@ -253,43 +293,53 @@ class ThumbnailDesignerAgent {
   async addTextOverlay(imagePath, concept) {
     const outputPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_final_${Date.now()}.png`);
     
-    // Create text overlay SVG
+    // Create text overlay SVG. A dark scrim sits behind the text so it stays
+    // legible over a busy AI-generated photo background, not just a flat gradient.
     const textSvg = `
       <svg width="1280" height="720">
+        <defs>
+          <linearGradient id="scrim" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:black;stop-opacity:0" />
+            <stop offset="100%" style="stop-color:black;stop-opacity:0.75" />
+          </linearGradient>
+        </defs>
         <style>
-          .primary { 
-            fill: ${concept.colors.accent === 'white' ? 'white' : 'black'}; 
-            font-size: 120px; 
-            font-weight: bold; 
+          .primary {
+            fill: white;
+            font-size: 110px;
+            font-weight: bold;
             font-family: Arial, sans-serif;
             text-anchor: middle;
           }
-          .secondary { 
-            fill: ${concept.colors.accent}; 
-            font-size: 60px; 
-            font-weight: bold; 
+          .secondary {
+            fill: ${concept.colors.accent};
+            font-size: 56px;
+            font-weight: bold;
             font-family: Arial, sans-serif;
             text-anchor: middle;
           }
           .shadow {
             fill: black;
-            opacity: 0.5;
+            opacity: 0.6;
           }
         </style>
-        
+
+        <rect x="0" y="440" width="1280" height="280" fill="url(#scrim)" />
+
         <!-- Shadow -->
-        <text x="642" y="302" class="primary shadow">${concept.primaryText}</text>
-        <text x="642" y="402" class="secondary shadow">${concept.secondaryText}</text>
-        
+        <text x="642" y="572" class="primary shadow">${concept.primaryText}</text>
+        <text x="642" y="652" class="secondary shadow">${concept.secondaryText}</text>
+
         <!-- Main text -->
-        <text x="640" y="300" class="primary">${concept.primaryText}</text>
-        <text x="640" y="400" class="secondary">${concept.secondaryText}</text>
+        <text x="640" y="570" class="primary">${concept.primaryText}</text>
+        <text x="640" y="650" class="secondary">${concept.secondaryText}</text>
       </svg>
     `;
     
     const textOverlay = await sharp(Buffer.from(textSvg)).png().toBuffer();
-    
+
     await sharp(imagePath)
+      .resize(1280, 720, { fit: 'cover', position: 'centre' })
       .composite([{
         input: textOverlay,
         top: 0,

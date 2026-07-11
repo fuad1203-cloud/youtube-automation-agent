@@ -110,9 +110,18 @@ Return only valid JSON with this exact shape:
 {
   "title": "compelling title under 100 characters",
   "hook": "opening hook in one sentence",
+  "introduction": {
+    "topicIntro": "1 natural spoken sentence previewing this specific topic (not generic filler)",
+    "valueProposition": "1 sentence on what the viewer will specifically learn from this video",
+    "credibility": "1 sentence grounding why this topic/angle is worth watching, specific to the subject"
+  },
   "sections": [
     { "title": "section title", "content": ["spoken script bullet"], "duration": 60 }
   ],
+  "conclusion": {
+    "recap": ["3-4 specific bullets recapping what THIS video actually covered, not generic advice"],
+    "finalThought": "1 closing sentence specific to this topic"
+  },
   "cta": "clear call to action"
 }
 
@@ -125,6 +134,7 @@ Tone: ${template.tone}
 Pacing: ${template.pacing}
 Keywords: ${(strategy.keywords || []).join(', ')}
 Content guidelines: ${process.env.CONTENT_GUIDELINES || 'none'}
+Every field must be specific to this topic — do not use generic filler like "the fundamentals and why they matter" or "practical steps to get started".
 Avoid fabricated statistics, unsupported claims, and fake urgency.`;
 
     try {
@@ -143,12 +153,12 @@ Avoid fabricated statistics, unsupported claims, and fake urgency.`;
       return {
         title: String(parsed.title).slice(0, 100),
         hook: this.normalizeAIHook(parsed.hook),
-        introduction: await this.generateIntroduction(strategy),
+        introduction: await this.normalizeAIIntroduction(parsed.introduction, strategy),
         mainContent: {
           sections,
           totalDuration: this.calculateSectionsDuration(sections)
         },
-        conclusion: await this.generateConclusion(strategy),
+        conclusion: await this.normalizeAIConclusion(parsed.conclusion, strategy),
         callToAction: this.normalizeAICTA(parsed.cta, strategy),
         duration: this.estimateDuration({ sections }),
         tone: template.tone,
@@ -165,6 +175,40 @@ Avoid fabricated statistics, unsupported claims, and fake urgency.`;
       this.logger.warn(`AI script generation failed; using template fallback: ${error.message}`);
       return null;
     }
+  }
+
+  async normalizeAIIntroduction(introduction, strategy) {
+    const fallback = await this.generateIntroduction(strategy);
+    if (!introduction || typeof introduction !== 'object') {
+      return fallback;
+    }
+
+    return {
+      greeting: fallback.greeting,
+      topicIntro: String(introduction.topicIntro || fallback.topicIntro).trim(),
+      valueProposition: String(introduction.valueProposition || fallback.valueProposition).trim(),
+      credibility: String(introduction.credibility || fallback.credibility).trim(),
+      duration: '0:05-0:20'
+    };
+  }
+
+  async normalizeAIConclusion(conclusion, strategy) {
+    const fallback = await this.generateConclusion(strategy);
+    if (!conclusion || typeof conclusion !== 'object') {
+      return fallback;
+    }
+
+    const recap = Array.isArray(conclusion.recap)
+      ? conclusion.recap.map(line => String(line).trim()).filter(Boolean)
+      : [];
+
+    return {
+      type: 'conclusion',
+      title: 'Wrapping Up',
+      recap: recap.length > 0 ? recap : fallback.recap,
+      finalThought: String(conclusion.finalThought || fallback.finalThought).trim(),
+      duration: '30 seconds'
+    };
   }
 
   parseAIJsonResponse(response) {

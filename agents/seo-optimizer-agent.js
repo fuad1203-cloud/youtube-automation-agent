@@ -95,11 +95,13 @@ class SEOOptimizerAgent {
       return null;
     }
 
-    const prompt = `You are optimizing YouTube metadata.
+    const currentYear = new Date().getFullYear();
+    const primaryKeyword = (strategy.keywords || [])[0] || strategy.topic;
+    const prompt = `You are optimizing YouTube metadata for maximum SEO score.
 Return only valid JSON with this exact shape:
 {
-  "title": "SEO title under 100 characters",
-  "description": "YouTube description with useful summary and timestamps if relevant",
+  "title": "SEO title",
+  "description": "YouTube description",
   "tags": ["tag"]
 }
 
@@ -109,11 +111,17 @@ Angle: ${strategy.angle}
 Content type: ${strategy.contentType}
 Target audience: ${strategy.targetAudience}
 Keywords: ${(strategy.keywords || []).join(', ')}
-Keep tags under YouTube's 500 character total guidance. Avoid fabricated statistics and unsupported claims.`;
+
+Follow these formatting requirements exactly:
+- Title: 60-70 characters, includes a specific number or statistic, includes "${currentYear}", includes one of the words how/what/why/best/top, proper title case.
+- Description: at least 500 characters, well formatted across more than 10 lines, includes a line that starts with the word "TIMESTAMPS" followed by a chapter list with timestamps matching the video's content, includes a line "Subscribe for more videos like this." (no placeholder URLs — do not invent links), and has the phrase "${primaryKeyword}" within the first 125 characters.
+- Tags: 15-18 tags, no duplicates, at least one multi-word long-tail keyword, total joined length under 500 characters.
+
+Avoid fabricated statistics and unsupported claims — use real figures already present in the topic/angle/keywords, not invented numbers.`;
 
     try {
       const response = await this.aiTextService.generateText(prompt, {
-        maxTokens: 1400,
+        maxTokens: 3000,
         temperature: 0.6
       });
       const parsed = this.parseAIJsonResponse(response);
