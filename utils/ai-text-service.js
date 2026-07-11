@@ -111,14 +111,39 @@ class AITextService {
       throw new Error('No AI text provider configured');
     }
 
-    const response = await this.client.chat.completions.create({
+    const params = {
       model,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: maxTokens,
       temperature,
-    });
+    };
 
-    return response.choices[0].message.content;
+    // Some newer models (e.g. reasoning-tier) reject max_tokens in favor of
+    // max_completion_tokens, and/or reject a non-default temperature. Adapt
+    // to whichever the model actually rejects rather than hardcoding per-model.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.client.chat.completions.create(params);
+        return response.choices[0].message.content;
+      } catch (error) {
+        const message = error?.message || '';
+
+        if (message.includes('max_completion_tokens') && 'max_tokens' in params) {
+          params.max_completion_tokens = params.max_tokens;
+          delete params.max_tokens;
+          continue;
+        }
+
+        if (message.includes('temperature') && 'temperature' in params) {
+          delete params.temperature;
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new Error('AI text generation failed after retrying for model compatibility');
   }
 
   isAvailable() {

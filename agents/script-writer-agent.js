@@ -129,7 +129,7 @@ Avoid fabricated statistics, unsupported claims, and fake urgency.`;
 
     try {
       const response = await this.aiTextService.generateText(prompt, {
-        maxTokens: 1800,
+        maxTokens: 4000,
         temperature: 0.7
       });
       const parsed = this.parseAIJsonResponse(response);
