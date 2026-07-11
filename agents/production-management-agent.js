@@ -291,8 +291,9 @@ class ProductionManagementAgent {
       const visualPrompts = this.createVisualPromptsFromScript(script);
       const visualAssets = [];
       
+      const visualStyle = process.env.VISUAL_STYLE || 'cinematic';
       for (const prompt of visualPrompts) {
-        const assets = await this.aiVideoGenerator.generateVisualAssets(prompt, 'ethereal', 1);
+        const assets = await this.aiVideoGenerator.generateVisualAssets(prompt, visualStyle, 1);
         visualAssets.push(...assets);
       }
       
@@ -616,25 +617,31 @@ class ProductionManagementAgent {
 
   // Helper method to create visual prompts from script content
   createVisualPromptsFromScript(script) {
+    const topic = script.metadata?.strategy?.topic || script.title;
     const prompts = [];
-    
+
     // Title prompt
-    prompts.push(`${script.title}, ethereal storytelling, mystical background`);
-    
-    // Content-based prompts
+    prompts.push(`Documentary-style editorial photograph representing: ${script.title}. Realistic, no on-image text.`);
+
+    // Content-based prompts, grounded in each section's actual subject matter
     if (script.mainContent && script.mainContent.sections) {
       script.mainContent.sections.forEach(section => {
         if (section.title) {
-          prompts.push(`${section.title}, ethereal dreamscape, creative visualization`);
+          const detail = Array.isArray(section.content) ? section.content[0] : section.content;
+          prompts.push(
+            `Documentary-style editorial photograph illustrating "${section.title}" in the context of ${topic}` +
+            (detail ? `: ${String(detail).slice(0, 150)}` : '') +
+            '. Realistic, no on-image text.'
+          );
         }
       });
     }
-    
+
     // Ensure we have at least 3 prompts
     while (prompts.length < 3) {
-      prompts.push('ethereal dreamscape, mystical storytelling, creative visualization');
+      prompts.push(`Documentary-style editorial photograph representing: ${topic}. Realistic, no on-image text.`);
     }
-    
+
     return prompts.slice(0, 5); // Limit to 5 for cost control
   }
 

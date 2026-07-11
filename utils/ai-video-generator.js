@@ -225,245 +225,63 @@ class AIVideoGenerator {
 
   async generateSlideshowVideo(script, visualAssets, audioPath, outputPath) {
     this.logger.info('Creating slideshow video...');
-    
-    const { chromium } = require('playwright');
-    const browser = await chromium.launch();
-    const page = await browser.newPage();
 
-    // Create HTML for slideshow
-    const slideshowHtml = this.createSlideshowHTML(script, visualAssets);
-    
-    // Set page content
-    await page.setContent(slideshowHtml);
-    await page.setViewportSize({ width: 1920, height: 1080 });
+    // Use the real narration length as the source of truth, not a word-count
+    // guess — the estimator undercounts array-shaped section content, which
+    // previously produced a visual track far shorter than the actual audio
+    // and silently truncated the narration via addAudioToVideo's -shortest.
+    const duration = await this.getAudioDuration(audioPath).catch(() => this.calculateScriptDuration(script));
 
-    // Record video of the slideshow
-    const videoPath = outputPath.replace('.mp4', '_visual.mp4');
-    
-    // Use Playwright to record
-    await page.waitForTimeout(1000); // Wait for assets to load
-    
-    // Create video frames by taking screenshots at intervals
-    const duration = this.calculateScriptDuration(script);
-    const frameCount = Math.ceil(duration * 30); // 30 FPS
-    const frameInterval = duration / frameCount * 1000;
+    const images = visualAssets && visualAssets.length > 0
+      ? visualAssets
+      : [await this.createPlaceholderFrame(outputPath)];
 
-    const framesDir = path.join(path.dirname(outputPath), 'frames');
-    await fs.mkdir(framesDir, { recursive: true });
-
-    for (let i = 0; i < frameCount; i++) {
-      await page.screenshot({
-        path: path.join(framesDir, `frame_${String(i).padStart(6, '0')}.png`),
-        fullPage: true
-      });
-      
-      // Advance animation
-      await page.evaluate(() => {
-        if (window.advanceAnimation) {
-          window.advanceAnimation();
-        }
-      });
-      
-      await page.waitForTimeout(frameInterval);
-    }
-
-    await browser.close();
-
-    // Convert frames to video using FFmpeg
-    const ffmpegCommand = `ffmpeg -framerate 30 -i "${framesDir}/frame_%06d.png" -c:v libx264 -pix_fmt yuv420p "${videoPath}"`;
-    await execAsync(ffmpegCommand);
+    const visualPath = outputPath.replace('.mp4', '_visual.mp4');
+    await this.buildImageSequenceVideo(images, duration, visualPath);
 
     // Add audio
-    await this.addAudioToVideo(videoPath, audioPath, outputPath);
-
-    // Cleanup frames
-    await this.cleanupDirectory(framesDir);
+    await this.addAudioToVideo(visualPath, audioPath, outputPath);
+    await fs.unlink(visualPath).catch(() => {});
 
     return outputPath;
   }
 
-  createSlideshowHTML(script, visualAssets) {
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            width: 1920px;
-            height: 1080px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            font-family: 'Arial', sans-serif;
-            overflow: hidden;
-        }
-        
-        .slide {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 2s ease-in-out;
-        }
-        
-        .slide.active {
-            opacity: 1;
-        }
-        
-        .content {
-            text-align: center;
-            color: white;
-            max-width: 80%;
-        }
-        
-        h1 {
-            font-size: 72px;
-            margin-bottom: 30px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        }
-        
-        h2 {
-            font-size: 48px;
-            margin-bottom: 20px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        }
-        
-        p {
-            font-size: 36px;
-            line-height: 1.4;
-            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-        }
-        
-        .background-image {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            opacity: 0.3;
-            z-index: -1;
-        }
-        
-        .particles {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            z-index: -1;
-        }
-        
-        .particle {
-            position: absolute;
-            background: rgba(255,255,255,0.8);
-            border-radius: 50%;
-            animation: float 6s ease-in-out infinite;
-        }
-        
-        @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-20px); }
-        }
-    </style>
-</head>
-<body>
-    <div class="particles"></div>
-    
-    <!-- Title Slide -->
-    <div class="slide active">
-        ${visualAssets[0] ? `<img class="background-image" src="${visualAssets[0]}" />` : ''}
-        <div class="content">
-            <h1>${script.title}</h1>
-            <p>Ethereal Dreamscript</p>
-        </div>
-    </div>
-    
-    ${this.generateContentSlides(script, visualAssets).join('')}
-    
-    <!-- Subscribe Slide -->
-    <div class="slide">
-        <div class="content">
-            <h2>✨ Subscribe for More Stories ✨</h2>
-            <p>New content daily at 2:00 PM</p>
-        </div>
-    </div>
-    
-    <script>
-        // Create floating particles
-        function createParticles() {
-            const container = document.querySelector('.particles');
-            for (let i = 0; i < 20; i++) {
-                const particle = document.createElement('div');
-                particle.className = 'particle';
-                particle.style.left = Math.random() * 100 + '%';
-                particle.style.top = Math.random() * 100 + '%';
-                particle.style.width = (Math.random() * 4 + 2) + 'px';
-                particle.style.height = particle.style.width;
-                particle.style.animationDelay = Math.random() * 6 + 's';
-                container.appendChild(particle);
-            }
-        }
-        
-        let currentSlide = 0;
-        const slides = document.querySelectorAll('.slide');
-        
-        function advanceAnimation() {
-            slides[currentSlide].classList.remove('active');
-            currentSlide = (currentSlide + 1) % slides.length;
-            slides[currentSlide].classList.add('active');
-        }
-        
-        window.advanceAnimation = advanceAnimation;
-        createParticles();
-    </script>
-</body>
-</html>`;
+  async getAudioDuration(audioPath) {
+    const { stdout } = await execAsync(
+      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${audioPath}"`
+    );
+    const seconds = parseFloat(stdout.trim());
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error('Could not determine audio duration');
+    }
+    return seconds;
   }
 
-  generateContentSlides(script, visualAssets) {
-    const slides = [];
-    
-    if (script.mainContent && script.mainContent.sections) {
-      script.mainContent.sections.forEach((section, index) => {
-        const assetIndex = Math.min(index + 1, visualAssets.length - 1);
-        
-        slides.push(`
-        <div class="slide">
-            ${visualAssets[assetIndex] ? `<img class="background-image" src="${visualAssets[assetIndex]}" />` : ''}
-            <div class="content">
-                <h2>${section.title}</h2>
-                ${this.formatSectionContent(section)}
-            </div>
-        </div>`);
-      });
-    }
-    
-    return slides;
+  async createPlaceholderFrame(outputPath) {
+    const framePath = outputPath.replace('.mp4', '_placeholder.png');
+    await execAsync(
+      `ffmpeg -y -f lavfi -i "color=c=0x1a1a2e:s=1920x1080" -frames:v 1 "${framePath}"`
+    );
+    return framePath;
   }
 
-  formatSectionContent(section) {
-    if (section.items && Array.isArray(section.items)) {
-      return section.items.slice(0, 3).map(item => 
-        `<p>${item.number}. ${item.title}</p>`
-      ).join('');
-    }
-    
-    if (section.steps && Array.isArray(section.steps)) {
-      return section.steps.slice(0, 3).map(step => 
-        `<p>${step.title}</p>`
-      ).join('');
-    }
-    
-    if (typeof section.content === 'string') {
-      return `<p>${section.content.slice(0, 200)}${section.content.length > 200 ? '...' : ''}</p>`;
-    }
-    
-    return '<p>Content coming soon...</p>';
+  async buildImageSequenceVideo(images, totalDuration, outputPath) {
+    const perImageDuration = Math.max(1, totalDuration / images.length);
+    const concatListPath = outputPath.replace('.mp4', '_concat.txt');
+
+    const lines = images.map(
+      img => `file '${img.replace(/'/g, "'\\''")}'\nduration ${perImageDuration.toFixed(2)}`
+    );
+    // ffmpeg's concat demuxer ignores the final entry's duration unless the
+    // last file is repeated once more without one.
+    lines.push(`file '${images[images.length - 1].replace(/'/g, "'\\''")}'`);
+    await fs.writeFile(concatListPath, lines.join('\n'));
+
+    const ffmpegCommand = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" ` +
+      `-vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" ` +
+      `-c:v libx264 -pix_fmt yuv420p -t ${totalDuration.toFixed(2)} "${outputPath}"`;
+    await execAsync(ffmpegCommand);
+    await fs.unlink(concatListPath).catch(() => {});
   }
 
   calculateScriptDuration(script) {
@@ -480,6 +298,8 @@ class AIVideoGenerator {
       script.mainContent.sections.forEach(section => {
         if (typeof section.content === 'string') {
           totalWords += section.content.split(' ').length;
+        } else if (Array.isArray(section.content)) {
+          totalWords += section.content.join(' ').split(' ').length;
         }
         if (section.items) {
           section.items.forEach(item => {
@@ -522,18 +342,6 @@ class AIVideoGenerator {
       writer.on('finish', resolve);
       writer.on('error', reject);
     });
-  }
-
-  async cleanupDirectory(dirPath) {
-    try {
-      const files = await fs.readdir(dirPath);
-      for (const file of files) {
-        await fs.unlink(path.join(dirPath, file));
-      }
-      await fs.rmdir(dirPath);
-    } catch (error) {
-      this.logger.warn('Cleanup failed:', error.message);
-    }
   }
 
   async generateThumbnail(script, style = "ethereal") {
