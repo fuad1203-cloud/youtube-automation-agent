@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const { Logger } = require('../utils/logger');
 const { AIVideoGenerator } = require('../utils/ai-video-generator');
+const { getCurrentStyle } = require('../utils/visual-styles');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -284,15 +285,19 @@ class ProductionManagementAgent {
       // Generate visual assets using DALL-E
       const visualPrompts = this.createVisualPromptsFromScript(script);
       const visualAssets = [];
-      
-      const visualStyle = process.env.VISUAL_STYLE || 'cinematic';
-      for (const prompt of visualPrompts) {
+
+      const visualStyle = getCurrentStyle();
+      for (const { prompt } of visualPrompts) {
         const assets = await this.aiVideoGenerator.generateVisualAssets(prompt, visualStyle, 1);
         visualAssets.push(...assets);
       }
-      
+
       productionData.assets.video = {
         visualAssets: visualAssets,
+        // How long each image should stay on screen, proportional to that
+        // section's actual narrated length, instead of splitting screen time
+        // equally regardless of how much is said over each image.
+        visualWeights: visualPrompts.map(p => p.weight),
         duration: productionData.estimatedDuration,
         format: 'mp4',
         resolution: '1920x1080',
@@ -576,7 +581,8 @@ class ProductionManagementAgent {
         productionData.script,
         productionData.assets.video.visualAssets || [],
         productionData.assets.audio.path,
-        finalVideoPath
+        finalVideoPath,
+        productionData.assets.video.visualWeights
       );
 
       // Burn captions in when enabled and available, since the YouTube API
@@ -660,29 +666,41 @@ class ProductionManagementAgent {
       'not a collage, not multiple panels. Realistic composition, no on-image text.';
     const prompts = [];
 
-    // Title prompt
-    prompts.push(`A scene representing: ${script.title}. ${singleSceneConstraint}`);
+    // Title prompt — fixed short weight, it's on screen only for the hook/intro
+    prompts.push({ prompt: `A scene representing: ${script.title}. ${singleSceneConstraint}`, weight: 20 });
 
-    // Content-based prompts, grounded in each section's actual subject matter
+    // Content-based prompts, grounded in each section's actual subject matter.
+    // Every section gets its own dedicated image (not a shared/generic one) so
+    // the visuals actually track what's being said at each point in the video,
+    // and each image's weight matches that section's actual narrated length.
     if (script.mainContent && script.mainContent.sections) {
       script.mainContent.sections.forEach(section => {
         if (section.title) {
-          const detail = Array.isArray(section.content) ? section.content[0] : section.content;
-          prompts.push(
-            `A scene illustrating "${section.title}" in the context of ${topic}` +
-            (detail ? `: ${String(detail).slice(0, 150)}` : '') +
-            `. ${singleSceneConstraint}`
-          );
+          const detail = Array.isArray(section.content)
+            ? section.content.slice(0, 2).join(' ')
+            : section.content;
+          prompts.push({
+            prompt: `A specific, literal scene depicting exactly this point — "${section.title}" — ` +
+              `from a video about ${topic}` +
+              (detail ? `. What's being said at this moment: ${String(detail).slice(0, 300)}` : '') +
+              `. Show a concrete, recognizable moment or object tied directly to this specific point, ` +
+              `not a generic or abstract stand-in. ${singleSceneConstraint}`,
+            weight: section.duration || 60
+          });
         }
       });
     }
 
     // Ensure we have at least 3 prompts
     while (prompts.length < 3) {
-      prompts.push(`A scene representing: ${topic}. ${singleSceneConstraint}`);
+      prompts.push({ prompt: `A scene representing: ${topic}. ${singleSceneConstraint}`, weight: 60 });
     }
 
-    return prompts.slice(0, 5); // Limit to 5 for cost control
+    // One image per section (plus the title image), capped to bound cost —
+    // previously hard-capped at 5 regardless of section count, which meant
+    // longer list-style videos had several points with no matching visual.
+    const maxAssets = parseInt(process.env.MAX_VISUAL_ASSETS, 10) || 10;
+    return prompts.slice(0, maxAssets);
   }
 
   // Fallback simulation methods

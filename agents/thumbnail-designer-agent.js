@@ -4,6 +4,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs').promises;
 const { Logger } = require('../utils/logger');
+const { FLAT_SKETCH_STYLES, getCurrentStyle, getStyleEnhancement } = require('../utils/visual-styles');
 
 class ThumbnailDesignerAgent {
   constructor(db, credentials) {
@@ -202,14 +203,10 @@ class ThumbnailDesignerAgent {
   }
 
   async createPrompt(concept) {
-    const visualStyle = process.env.VISUAL_STYLE || 'cinematic';
-    const artDirection = visualStyle === 'traditional-cartoon'
-      ? 'A hand-drawn 2D cartoon illustration in the style of a traditionally animated explainer ' +
-        'video, flat cel-shaded coloring, bold clean black outlines, warm saturated engaging colors, ' +
-        'simple appealing character/prop design. Avoid photorealism, avoid 3D rendering, avoid glossy ' +
-        'AI-art sheen, avoid extra fingers or warped hands.'
-      : 'A photorealistic, dramatic YouTube thumbnail background scene, cinematic lighting, high ' +
-        'contrast, professional editorial photography style.';
+    const visualStyle = getCurrentStyle();
+    const artDirection = FLAT_SKETCH_STYLES.has(visualStyle)
+      ? getStyleEnhancement(visualStyle)
+      : 'A photorealistic, dramatic YouTube thumbnail background scene, ' + getStyleEnhancement(visualStyle);
 
     return `${artDirection} Depicting: ${concept.subject}. ${concept.angle}
     Emotional tone: ${concept.emotion}, ${concept.style}

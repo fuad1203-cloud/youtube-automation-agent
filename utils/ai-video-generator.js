@@ -6,6 +6,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const { Logger } = require('./logger');
+const { FLAT_SKETCH_STYLES, getStyleEnhancement } = require('./visual-styles');
 
 const execAsync = promisify(exec);
 
@@ -107,9 +108,13 @@ class AIVideoGenerator {
       input: text,
       speed: 1.0,
       instructions: process.env.TTS_VOICE_INSTRUCTIONS ||
-        "Speak naturally and conversationally, like a real person casually explaining " +
-        "something to a friend. Use natural breathing pauses between sentences, vary your " +
-        "pacing and emphasis, and avoid a flat, robotic, or overly formal delivery."
+        "You are a young YouTuber talking directly to camera, riffing casually - not reading a " +
+        "script. Sound genuinely human: real breath pauses before new ideas, slightly uneven " +
+        "pacing (some phrases quick, some slower for emphasis), natural pitch variation like you " +
+        "actually mean what you're saying, occasional short pause after a punchy or surprising " +
+        "line to let it land. Talk like you're mid-conversation with a friend, not presenting or " +
+        "announcing. Absolutely avoid: flat even pacing, a 'narrator' or 'announcer' tone, evenly " +
+        "spaced words, sounding like you're reading off a page."
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -158,21 +163,8 @@ class AIVideoGenerator {
   }
 
   enhanceVisualPrompt(prompt, style) {
-    const styleEnhancements = {
-      ethereal: "ethereal, dreamy, mystical, soft lighting, floating particles, cosmic background",
-      modern: "modern, clean, minimalist, professional, sleek design, contemporary",
-      animated: "animated style, cartoon, vibrant colors, expressive, dynamic",
-      cinematic: "cinematic lighting, dramatic, movie poster style, high contrast",
-      abstract: "abstract art, geometric shapes, gradient colors, artistic composition",
-      "traditional-cartoon": "hand-drawn 2D cartoon illustration in the style of a traditionally " +
-        "animated explainer video, flat cel-shaded coloring, bold clean black outlines, warm " +
-        "saturated color palette, simple appealing character and prop design, textured paper-like " +
-        "background shading. Avoid photorealism, avoid 3D rendering, avoid glossy airbrushed " +
-        "digital-art sheen, avoid extra fingers or warped hands, avoid any text or watermark."
-    };
-
-    const enhancement = styleEnhancements[style] || styleEnhancements.ethereal;
-    const suffix = style === 'traditional-cartoon'
+    const enhancement = getStyleEnhancement(style);
+    const suffix = FLAT_SKETCH_STYLES.has(style)
       ? 'high quality, 16:9 aspect ratio'
       : 'high quality, 16:9 aspect ratio, digital art';
     return `${prompt}, ${enhancement}, ${suffix}`;
@@ -194,17 +186,17 @@ class AIVideoGenerator {
     });
   }
 
-  async generateVideo(script, visualAssets, audioPath, outputPath) {
+  async generateVideo(script, visualAssets, audioPath, outputPath, visualWeights) {
     this.logger.info('Generating video from assets...');
-    
+
     try {
       // Try Replicate for video generation first
       if (this.replicate && this.replicate.auth) {
         return await this.generateReplicateVideo(script, visualAssets, audioPath, outputPath);
       }
-      
+
       // Fallback to simple slideshow with Playwright
-      return await this.generateSlideshowVideo(script, visualAssets, audioPath, outputPath);
+      return await this.generateSlideshowVideo(script, visualAssets, audioPath, outputPath, visualWeights);
     } catch (error) {
       this.logger.error('Video generation failed:', error);
       return await this.simulateVideoGeneration(script, visualAssets, audioPath, outputPath);
@@ -235,7 +227,7 @@ class AIVideoGenerator {
     return outputPath;
   }
 
-  async generateSlideshowVideo(script, visualAssets, audioPath, outputPath) {
+  async generateSlideshowVideo(script, visualAssets, audioPath, outputPath, visualWeights) {
     this.logger.info('Creating slideshow video...');
 
     // Use the real narration length as the source of truth, not a word-count
@@ -247,9 +239,12 @@ class AIVideoGenerator {
     const images = visualAssets && visualAssets.length > 0
       ? visualAssets
       : [await this.createPlaceholderFrame(outputPath)];
+    const weights = images.length > 1 && visualWeights && visualWeights.length === images.length
+      ? visualWeights
+      : null;
 
     const visualPath = outputPath.replace('.mp4', '_visual.mp4');
-    await this.buildImageSequenceVideo(images, duration, visualPath);
+    await this.buildImageSequenceVideo(images, duration, visualPath, weights);
 
     // Add audio
     await this.addAudioToVideo(visualPath, audioPath, outputPath);
@@ -277,12 +272,18 @@ class AIVideoGenerator {
     return framePath;
   }
 
-  async buildImageSequenceVideo(images, totalDuration, outputPath) {
-    const perImageDuration = Math.max(1, totalDuration / images.length);
+  async buildImageSequenceVideo(images, totalDuration, outputPath, weights) {
+    // Without weights, split screen time equally. With weights (e.g. each
+    // section's actual narrated duration), give each image time proportional
+    // to how long that point is actually being talked about.
+    const totalWeight = weights ? weights.reduce((sum, w) => sum + w, 0) : null;
+    const durations = images.map((_, i) =>
+      Math.max(1, totalWeight ? totalDuration * (weights[i] / totalWeight) : totalDuration / images.length)
+    );
     const concatListPath = outputPath.replace('.mp4', '_concat.txt');
 
     const lines = images.map(
-      img => `file '${img.replace(/'/g, "'\\''")}'\nduration ${perImageDuration.toFixed(2)}`
+      (img, i) => `file '${img.replace(/'/g, "'\\''")}'\nduration ${durations[i].toFixed(2)}`
     );
     // ffmpeg's concat demuxer ignores the final entry's duration unless the
     // last file is repeated once more without one.
