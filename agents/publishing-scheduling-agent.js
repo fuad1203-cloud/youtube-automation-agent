@@ -110,7 +110,19 @@ class PublishingSchedulingAgent {
   async uploadToYouTube(scheduleEntry) {
     const { metadata } = scheduleEntry;
     
-    // Prepare video metadata
+    // Prepare video metadata. publishAt is only meaningful (and only accepted
+    // by the API) alongside privacyStatus "private" — it tells YouTube to
+    // auto-flip the video to public at that time. Omit it entirely when there
+    // is no scheduled time, so an on-demand publish doesn't silently end up
+    // held private until some future auto-publish date.
+    const status = {
+      privacyStatus: process.env.DEFAULT_PRIVACY_STATUS || 'private',
+      selfDeclaredMadeForKids: false
+    };
+    if (scheduleEntry.publishTime) {
+      status.publishAt = scheduleEntry.publishTime;
+    }
+
     const videoMetadata = {
       snippet: {
         title: metadata.seo.title,
@@ -120,11 +132,7 @@ class PublishingSchedulingAgent {
         defaultLanguage: metadata.seo.metadata.language,
         defaultAudioLanguage: metadata.seo.metadata.language
       },
-      status: {
-        privacyStatus: process.env.DEFAULT_PRIVACY_STATUS || 'private',
-        publishAt: scheduleEntry.publishTime,
-        selfDeclaredMadeForKids: false
-      }
+      status
     };
     
     // Upload video file
