@@ -344,45 +344,6 @@ class AIVideoGenerator {
     });
   }
 
-  async generateThumbnail(script, style = "ethereal") {
-    this.logger.info('Generating custom thumbnail...');
-    
-    try {
-      if (!this.openai) {
-        return await this.simulateThumbnailGeneration(script, style);
-      }
-
-      const prompt = `YouTube thumbnail for "${script.title}", ${style} style, eye-catching, high contrast text, professional design, clickable, engaging`;
-      
-      const response = await this.openai.images.generate({
-        model: "gpt-image-2",
-        prompt: prompt,
-        n: 1,
-        size: "1536x1024",
-        quality: "high"
-      });
-
-      const thumbnailPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_${Date.now()}.png`);
-      await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
-
-      if (response.data[0].b64_json) {
-        const buffer = Buffer.from(response.data[0].b64_json, 'base64');
-        await fs.writeFile(thumbnailPath, buffer);
-      } else {
-        await this.downloadImage(response.data[0].url, thumbnailPath);
-      }
-
-      return {
-        path: thumbnailPath,
-        dimensions: { width: 1536, height: 1024 },
-        fileSize: await this.getFileSize(thumbnailPath)
-      };
-    } catch (error) {
-      this.logger.error('Thumbnail generation failed:', error);
-      return await this.simulateThumbnailGeneration(script, style);
-    }
-  }
-
   async getFileSize(filePath) {
     const stats = await fs.stat(filePath);
     return stats.size;
@@ -437,26 +398,6 @@ class AIVideoGenerator {
     return infoPath;
   }
 
-  async simulateThumbnailGeneration(script, style) {
-    this.logger.info('Simulating thumbnail generation...');
-    
-    const thumbnailPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_sim_${Date.now()}.info`);
-    await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
-    
-    await fs.writeFile(thumbnailPath, JSON.stringify({
-      message: 'AI thumbnail would be generated here',
-      title: script.title,
-      style: style,
-      timestamp: new Date().toISOString()
-    }, null, 2));
-    
-    return {
-      path: thumbnailPath,
-      dimensions: { width: 1792, height: 1024 },
-      fileSize: 1024,
-      simulated: true
-    };
-  }
 }
 
 module.exports = { AIVideoGenerator };

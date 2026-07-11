@@ -62,7 +62,7 @@ class ProductionManagementAgent {
         status: 'processing',
         assets: {
           script: await this.processScript(script),
-          thumbnail: await this.processThumbnail(thumbnail, script),
+          thumbnail: await this.processThumbnail(thumbnail),
           audio: null, // Will be generated later
           video: null, // Will be generated later
           captions: null // Will be generated later
@@ -206,43 +206,36 @@ class ProductionManagementAgent {
     return ttsText;
   }
 
-  async processThumbnail(thumbnail, script) {
-    try {
-      // Try to generate AI thumbnail first
-      const thumbnailScript = thumbnail.script || script || { title: thumbnail.title || 'Untitled Video' };
-      const aiThumbnail = await this.aiVideoGenerator.generateThumbnail(thumbnailScript, 'ethereal');
-      
-      return {
-        path: aiThumbnail.path,
-        originalPath: thumbnail.path,
-        dimensions: aiThumbnail.dimensions,
-        fileSize: aiThumbnail.fileSize,
-        generatedWith: 'AI'
-      };
-    } catch (error) {
-      this.logger.error('AI thumbnail generation failed:', error);
-      
-      // Fallback to original processing
-      const productionThumbnailPath = path.join(
-        __dirname, '..', 'data', 'assets', 
-        `thumbnail_${Date.now()}.jpg`
-      );
-      
-      if (thumbnail.path && await fs.access(thumbnail.path).then(() => true).catch(() => false)) {
-        const originalBuffer = await fs.readFile(thumbnail.path);
-        await fs.writeFile(productionThumbnailPath, originalBuffer);
-      } else {
-        // Create placeholder
-        await fs.writeFile(productionThumbnailPath + '.placeholder', 'Thumbnail placeholder');
-      }
-      
+  async processThumbnail(thumbnail) {
+    // The Thumbnail Designer Agent already produced a topic-specific
+    // thumbnail (AI background art + text overlay) upstream — reuse it
+    // rather than generating an unrelated replacement here.
+    const productionThumbnailPath = path.join(
+      __dirname, '..', 'data', 'assets',
+      `thumbnail_${Date.now()}.jpg`
+    );
+
+    if (thumbnail.path && await fs.access(thumbnail.path).then(() => true).catch(() => false)) {
+      const originalBuffer = await fs.readFile(thumbnail.path);
+      await fs.writeFile(productionThumbnailPath, originalBuffer);
+
       return {
         path: productionThumbnailPath,
         originalPath: thumbnail.path,
-        dimensions: thumbnail.dimensions || { width: 1792, height: 1024 },
-        fileSize: thumbnail.fileSize || 0
+        dimensions: thumbnail.dimensions || { width: 1280, height: 720 },
+        fileSize: thumbnail.fileSize || 0,
+        generatedWith: 'ThumbnailDesignerAgent'
       };
     }
+
+    // No upstream thumbnail available — placeholder
+    await fs.writeFile(productionThumbnailPath + '.placeholder', 'Thumbnail placeholder');
+    return {
+      path: productionThumbnailPath + '.placeholder',
+      originalPath: thumbnail.path,
+      dimensions: thumbnail.dimensions || { width: 1280, height: 720 },
+      fileSize: 0
+    };
   }
 
   calculatePublishTime(strategy) {
