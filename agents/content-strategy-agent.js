@@ -278,7 +278,9 @@ Return only valid JSON with this exact shape:
 
 Requested topic: ${requestedTopic || 'none'}
 Trending topics available: ${trendingTopics || 'Technology Trends'}
+Channel niche/focus: ${process.env.CONTENT_NICHE || 'general educational content'}
 Channel target audience: ${process.env.TARGET_AUDIENCE || 'General audience interested in educational content'}
+Content guidelines: ${process.env.CONTENT_GUIDELINES || 'none'}
 Avoid fabricated claims and unsupported numbers.`;
 
     try {

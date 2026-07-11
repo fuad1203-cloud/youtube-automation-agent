@@ -124,6 +124,7 @@ Desired length: ${process.env.DEFAULT_VIDEO_LENGTH || '8-12 minutes'}
 Tone: ${template.tone}
 Pacing: ${template.pacing}
 Keywords: ${(strategy.keywords || []).join(', ')}
+Content guidelines: ${process.env.CONTENT_GUIDELINES || 'none'}
 Avoid fabricated statistics, unsupported claims, and fake urgency.`;
 
     try {
