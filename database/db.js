@@ -120,7 +120,7 @@ class Database {
         id TEXT PRIMARY KEY,
         production_id TEXT NOT NULL,
         title TEXT NOT NULL,
-        publish_time TEXT NOT NULL,
+        publish_time TEXT,
         status TEXT DEFAULT 'scheduled',
         priority INTEGER DEFAULT 50,
         metadata TEXT,
