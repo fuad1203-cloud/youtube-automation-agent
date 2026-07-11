@@ -653,10 +653,15 @@ class ProductionManagementAgent {
   // Helper method to create visual prompts from script content
   createVisualPromptsFromScript(script) {
     const topic = script.metadata?.strategy?.topic || script.title;
+    // Numbered-list topics/titles (e.g. "8 Money Habits...") can otherwise
+    // make the image model render a grid of N vignettes instead of one
+    // scene - be explicit that every prompt needs a single cohesive image.
+    const singleSceneConstraint = 'A single cohesive scene only - not a grid, not a contact sheet, ' +
+      'not a collage, not multiple panels. Realistic composition, no on-image text.';
     const prompts = [];
 
     // Title prompt
-    prompts.push(`Documentary-style editorial photograph representing: ${script.title}. Realistic, no on-image text.`);
+    prompts.push(`A scene representing: ${script.title}. ${singleSceneConstraint}`);
 
     // Content-based prompts, grounded in each section's actual subject matter
     if (script.mainContent && script.mainContent.sections) {
@@ -664,9 +669,9 @@ class ProductionManagementAgent {
         if (section.title) {
           const detail = Array.isArray(section.content) ? section.content[0] : section.content;
           prompts.push(
-            `Documentary-style editorial photograph illustrating "${section.title}" in the context of ${topic}` +
+            `A scene illustrating "${section.title}" in the context of ${topic}` +
             (detail ? `: ${String(detail).slice(0, 150)}` : '') +
-            '. Realistic, no on-image text.'
+            `. ${singleSceneConstraint}`
           );
         }
       });
@@ -674,7 +679,7 @@ class ProductionManagementAgent {
 
     // Ensure we have at least 3 prompts
     while (prompts.length < 3) {
-      prompts.push(`Documentary-style editorial photograph representing: ${topic}. Realistic, no on-image text.`);
+      prompts.push(`A scene representing: ${topic}. ${singleSceneConstraint}`);
     }
 
     return prompts.slice(0, 5); // Limit to 5 for cost control
