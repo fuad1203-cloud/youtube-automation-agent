@@ -4,6 +4,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Ad-hoc local scratch scripts (not part of the app)
+/tmp-*.js
+
 # Environment variables and credentials
 .env
 .env.local
