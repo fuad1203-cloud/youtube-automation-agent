@@ -105,12 +105,16 @@ class AIVideoGenerator {
       model: "gpt-4o-mini-tts",
       voice: "coral",
       input: text,
-      speed: 1.0
+      speed: 1.0,
+      instructions: process.env.TTS_VOICE_INSTRUCTIONS ||
+        "Speak naturally and conversationally, like a real person casually explaining " +
+        "something to a friend. Use natural breathing pauses between sentences, vary your " +
+        "pacing and emphasis, and avoid a flat, robotic, or overly formal delivery."
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());
     await fs.writeFile(outputPath, buffer);
-    
+
     this.logger.info('OpenAI TTS generation complete');
     return outputPath;
   }
@@ -159,11 +163,19 @@ class AIVideoGenerator {
       modern: "modern, clean, minimalist, professional, sleek design, contemporary",
       animated: "animated style, cartoon, vibrant colors, expressive, dynamic",
       cinematic: "cinematic lighting, dramatic, movie poster style, high contrast",
-      abstract: "abstract art, geometric shapes, gradient colors, artistic composition"
+      abstract: "abstract art, geometric shapes, gradient colors, artistic composition",
+      "traditional-cartoon": "hand-drawn 2D cartoon illustration in the style of a traditionally " +
+        "animated explainer video, flat cel-shaded coloring, bold clean black outlines, warm " +
+        "saturated color palette, simple appealing character and prop design, textured paper-like " +
+        "background shading. Avoid photorealism, avoid 3D rendering, avoid glossy airbrushed " +
+        "digital-art sheen, avoid extra fingers or warped hands, avoid any text or watermark."
     };
 
     const enhancement = styleEnhancements[style] || styleEnhancements.ethereal;
-    return `${prompt}, ${enhancement}, high quality, 16:9 aspect ratio, digital art`;
+    const suffix = style === 'traditional-cartoon'
+      ? 'high quality, 16:9 aspect ratio'
+      : 'high quality, 16:9 aspect ratio, digital art';
+    return `${prompt}, ${enhancement}, ${suffix}`;
   }
 
   async downloadImage(url, outputPath) {
@@ -326,6 +338,54 @@ class AIVideoGenerator {
     const command = `ffmpeg -i "${videoPath}" -i "${audioPath}" -c:v copy -c:a aac -shortest "${outputPath}"`;
     await execAsync(command);
     this.logger.info('Audio added to video successfully');
+  }
+
+  // Transcribes the real generated narration so caption timing matches actual
+  // speech, instead of relying on estimated per-section durations that can
+  // drift far from how fast the TTS voice actually speaks.
+  async transcribeAudioToSegments(audioPath) {
+    if (!this.openai) {
+      throw new Error('No OpenAI client available for transcription');
+    }
+
+    const fsSync = require('fs');
+    const transcription = await this.openai.audio.transcriptions.create({
+      file: fsSync.createReadStream(audioPath),
+      model: 'whisper-1',
+      response_format: 'verbose_json',
+      timestamp_granularities: ['segment']
+    });
+
+    return (transcription.segments || []).map(segment => ({
+      start: segment.start,
+      end: segment.end,
+      text: segment.text.trim()
+    }));
+  }
+
+  segmentsToSRT(segments) {
+    const formatSRTTime = (seconds) => {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      const ms = Math.round((seconds % 1) * 1000);
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
+    };
+
+    return segments
+      .map((segment, index) =>
+        `${index + 1}\n${formatSRTTime(segment.start)} --> ${formatSRTTime(segment.end)}\n${segment.text}\n`
+      )
+      .join('\n');
+  }
+
+  async burnCaptions(videoPath, srtPath, outputPath) {
+    // ffmpeg's subtitles filter needs an escaped path when passed as a filter argument
+    const escapedSrtPath = srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    const style = "FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=60";
+    const command = `ffmpeg -y -i "${videoPath}" -vf "subtitles='${escapedSrtPath}':force_style='${style}'" -c:a copy "${outputPath}"`;
+    await execAsync(command);
+    this.logger.info('Captions burned into video successfully');
   }
 
   async downloadVideo(url, outputPath) {

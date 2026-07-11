@@ -202,9 +202,18 @@ class ThumbnailDesignerAgent {
   }
 
   async createPrompt(concept) {
-    return `A photorealistic, dramatic YouTube thumbnail background scene depicting: ${concept.subject}. ${concept.angle}
+    const visualStyle = process.env.VISUAL_STYLE || 'cinematic';
+    const artDirection = visualStyle === 'traditional-cartoon'
+      ? 'A hand-drawn 2D cartoon illustration in the style of a traditionally animated explainer ' +
+        'video, flat cel-shaded coloring, bold clean black outlines, warm saturated engaging colors, ' +
+        'simple appealing character/prop design. Avoid photorealism, avoid 3D rendering, avoid glossy ' +
+        'AI-art sheen, avoid extra fingers or warped hands.'
+      : 'A photorealistic, dramatic YouTube thumbnail background scene, cinematic lighting, high ' +
+        'contrast, professional editorial photography style.';
+
+    return `${artDirection} Depicting: ${concept.subject}. ${concept.angle}
     Emotional tone: ${concept.emotion}, ${concept.style}
-    Composition: ${concept.composition}, cinematic lighting, high contrast, professional editorial photography style, optimized for high click-through rate.
+    Composition: ${concept.composition}, optimized for high click-through rate.
     Do not include any text, letters, words, captions, or logos in the image — leave clear negative space for a text overlay to be added separately.
     Resolution: 1280x720px, 16:9 aspect ratio.`;
   }

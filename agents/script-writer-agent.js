@@ -135,6 +135,7 @@ Pacing: ${template.pacing}
 Keywords: ${(strategy.keywords || []).join(', ')}
 Content guidelines: ${process.env.CONTENT_GUIDELINES || 'none'}
 Every field must be specific to this topic — do not use generic filler like "the fundamentals and why they matter" or "practical steps to get started".
+Write "content" bullets as natural spoken narration — full conversational sentences a real person would say out loud, not labels or notes. If this is a numbered list video, weave the item number and name naturally into the sentence itself (e.g. "Number three: build credit early.") rather than relying on a separate heading, since section titles are not read aloud.
 Avoid fabricated statistics, unsupported claims, and fake urgency.`;
 
     try {
