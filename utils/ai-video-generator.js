@@ -64,8 +64,80 @@ class AIVideoGenerator {
   }
 
   async generateElevenLabsTTS(text, outputPath) {
+    // ElevenLabs' text-to-speech endpoint caps a single request at 5000
+    // characters - a full video script routinely exceeds that, so long
+    // text needs to be split into chunks, synthesized separately, and
+    // stitched back into one continuous narration track.
+    const MAX_CHARS = 4500;
+    const chunks = this.splitTextForTTS(text, MAX_CHARS);
+
+    if (chunks.length === 1) {
+      return this.synthesizeElevenLabsChunk(chunks[0], outputPath);
+    }
+
+    this.logger.info(`Splitting narration into ${chunks.length} chunks for ElevenLabs (5000 char request limit)`);
+    const chunkPaths = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkPath = outputPath.replace('.mp3', `_chunk${i}.mp3`);
+      await this.synthesizeElevenLabsChunk(chunks[i], chunkPath);
+      chunkPaths.push(chunkPath);
+    }
+
+    await this.concatAudioFiles(chunkPaths, outputPath);
+    await Promise.all(chunkPaths.map(p => fs.unlink(p).catch(() => {})));
+
+    this.logger.info('ElevenLabs TTS generation complete');
+    return outputPath;
+  }
+
+  splitTextForTTS(text, maxChars) {
+    if (text.length <= maxChars) {
+      return [text];
+    }
+
+    const paragraphs = text.split(/\n\n+/);
+    const chunks = [];
+    let current = '';
+
+    const flush = () => {
+      if (current.trim()) chunks.push(current.trim());
+      current = '';
+    };
+
+    for (const paragraph of paragraphs) {
+      const candidate = current ? `${current}\n\n${paragraph}` : paragraph;
+      if (candidate.length <= maxChars) {
+        current = candidate;
+        continue;
+      }
+
+      flush();
+
+      if (paragraph.length <= maxChars) {
+        current = paragraph;
+        continue;
+      }
+
+      // A single paragraph is still too long - split on sentence boundaries.
+      const sentences = paragraph.match(/[^.!?]+[.!?]+|\S+$/g) || [paragraph];
+      for (const sentence of sentences) {
+        const sentenceCandidate = current ? `${current} ${sentence}` : sentence;
+        if (sentenceCandidate.length <= maxChars) {
+          current = sentenceCandidate;
+        } else {
+          flush();
+          current = sentence;
+        }
+      }
+    }
+    flush();
+
+    return chunks;
+  }
+
+  async synthesizeElevenLabsChunk(text, outputPath) {
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${this.elevenLabsVoiceId}`;
-    
+
     const data = {
       text: text,
       model_id: "eleven_v3",
@@ -77,28 +149,55 @@ class AIVideoGenerator {
       }
     };
 
-    const response = await axios({
-      method: 'POST',
-      url: url,
-      data: data,
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': this.elevenLabsApiKey
-      },
-      responseType: 'stream'
-    });
+    let response;
+    try {
+      response = await axios({
+        method: 'POST',
+        url: url,
+        data: data,
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': this.elevenLabsApiKey
+        },
+        responseType: 'stream'
+      });
+    } catch (error) {
+      throw new Error(`ElevenLabs TTS request failed: ${await this.readStreamErrorBody(error)}`);
+    }
 
     const writer = require('fs').createWriteStream(outputPath);
     response.data.pipe(writer);
 
     return new Promise((resolve, reject) => {
-      writer.on('finish', () => {
-        this.logger.info('ElevenLabs TTS generation complete');
-        resolve(outputPath);
-      });
+      writer.on('finish', () => resolve(outputPath));
       writer.on('error', reject);
     });
+  }
+
+  // axios with responseType 'stream' leaves error response bodies as an
+  // unread stream, which otherwise surfaces as an unreadable dump of
+  // internal socket/stream objects instead of the actual API error message.
+  async readStreamErrorBody(error) {
+    if (!error.response?.data?.on) {
+      return error.message;
+    }
+
+    return new Promise(resolve => {
+      const chunks = [];
+      error.response.data.on('data', c => chunks.push(c));
+      error.response.data.on('end', () => resolve(Buffer.concat(chunks).toString() || error.message));
+      error.response.data.on('error', () => resolve(error.message));
+    });
+  }
+
+  async concatAudioFiles(inputPaths, outputPath) {
+    const concatListPath = outputPath.replace('.mp3', '_concat.txt');
+    const lines = inputPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`);
+    await fs.writeFile(concatListPath, lines.join('\n'));
+
+    await execAsync(`ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c copy "${outputPath}"`);
+    await fs.unlink(concatListPath).catch(() => {});
   }
 
   async generateOpenAITTS(text, outputPath) {
